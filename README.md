@@ -108,3 +108,9 @@ Alice can now safely delete the temporary token resource she created on her serv
 ...
 < HTTP/1.1 200 OK
 ```
+
+# Current problems
+
+This authentication protocol is not safe if the app/client is not trusted, as it may disclose the bearer tokens to malicious 3rd party servers.
+
+
