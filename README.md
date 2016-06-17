@@ -52,7 +52,7 @@ Note: the location of this folder is linked to from her WebID profile like so:
 ```http
 > GET /foo HTTP/1.1
 > Host: bob.example
-> Authorization: WebID-Token webid="https://alice.example/profile#me" token="xyz123"
+> Authorization: WebID-Token webid="https://alice.example/profile#me" nonce="xyz123"
 ...
 ```
 
