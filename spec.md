@@ -1,90 +1,96 @@
-For some context, see: https://gist.github.com/sandhawke/bf5f0c7733050fd1b11b
-
-Simple Page-Owner Token (SPOT) Authentication
+WebID-Token Authentication
 =============================================
 
-This document specifies an HTTP authentication mechanism suitable for use in situations where the HTTP client is tightly coupled with another HTTP server.  It is very easy to implement and requires no extra crypto.
+This document specifies an HTTP authentication mechanism suitable for use in situations where an HTTP client is attempting to authenticate to another HTTP server on a different domain. It is very easy to implement and requires no extra crypto, nor cookies.
 
-For illustration purposes, we'll say Alice is a process which serves the web resource at http://alice.example/alice and wants to act as a client to access a protected resource http://bob.example/bob, which is served by a different process, Bob.
+For illustration purposes, we'll say Alice is a user with a WebID at `https://alice.example/profile#me` and wants to access a protected resource at `http://bob.example/foo`.
 
-For non-trivial use, to provide some resistance against attackers who can view or intercept network traffic or subvert the DNS, HTTPS URIs should be used, and clients should check that the server DNS name matches the certificate.
+It is imperative that no requests are passed in clear, and that HTTPS is deployed on all the servers.
 
 Status
 ------
 
-Not yet implemented.
+Pending implementation.
 
-Before wide deployment, the new authentication type Page-Owner-Token and the two new HTTP headers (Page-Owner-Token-Check and Page-Owner-Token-OK) should be registered with the IETF.
 
 Walkthrough
 -----------
 
-**Step 1.**  Alice performs an HTTP GET on an access-controlled page served by Bob, but does not authenticate herself, so Bob returns a 401 error.  The response includes a header telling Alice she can authenticate using this protocol and try again.
+**Step 1.**  Alice performs an HTTP GET on an access-controlled page served by Bob, but does not authenticate herself, so Bob returns a 401 error. The response includes a header telling Alice she can authenticate using this protocol and try again, as well as a unique and random string (i.e. nonce).
 
 ```http
-> GET /bob HTTP/1.1
+> GET /foo HTTP/1.1
 > Host: bob.example
 ...
 < HTTP/1.1 401 Authorization Required
-< WWW-Authenticate: Page-Owner-Token
+< WWW-Authenticate: WebID-Token nonce="xyz123"
 ...
 ```
 
-This uses the standard WWW-Authenticate HTTP header with a new keyword
+The response uses the standard WWW-Authenticate HTTP header with a new keyword
 for this new authentication type.
 
-**Step 2.**  Alice generates a cryptographicly random token, a nonce. In 
-this example, I'll write it as xyz123.   It should use only the Base64 characters.
+**Step 2.**  Alice creates a temporary resource containing the SHA1 sum of the nonce, under a dedicated container (i.e. folder) where she has write access (e.g. `alice.example/tokens/`).
 
-**Step 3.**  Alice repeats the GET, this time including a header which identifies her via a web page and includes the nonce:
-
-```http
-> GET /bob HTTP/1.1
-> Host: bob.example
-> Authorization: Page-Owner-Token client="http://alice.example/alice" token="xyz123"
-...
-```
-
-ISSUE: Should it just be http://alice.example/ ?   What does it mean to include the /alice?
-
-Alice can include multiple headers like this, since it might be that only one of her multiple identies actually has access to /bob and she doesn't now which.  The identity strings must be dereferenceable.  They can be either an Information resource IRI (returning 200 OK) or a non-information resource IRI (returning 303, or having a hash).   Either works fine for this protocol.
-
-Note that sending identity strings like this may reveal more to Bob than desirable.
-
-**Step 4.**  Bob checks to see if the request provides a valid token:
+`sha1sum('xyz123') -> 2b743ea5699560665032496d957cd8c0075029d5`
 
 ```http
-> HEAD /alice HTTP/1.1
+> PUT /tokens/2b743ea5699560665032496d957cd8c0075029d5
 > Host: alice.example
-> Page-Owner-Token-Check: token="xyz123" relying-party="http://bob.example/bob"
+...
+< HTTP/1.1 201 Created 
+```
+
+Note: the location of this folder is linked to from her WebID profile like so:
+
+```turtle
+<#me> <http://www.w3.org/ns/solid/terms#tokens> </tokens/> .
+```
+
+**Step 3.**  Alice repeats the GET, this time including a header which identifies her via her WebID and includes the nonce:
+
+```http
+> GET /foo HTTP/1.1
+> Host: bob.example
+> Authorization: WebID-Token webid="http://alice.example/profile#me" token="xyz123"
 ...
 ```
 
-The verb could be GET (instead of HEAD) if the Bob is interested in
-the content of /alice.
+The WebID string must be dereferenceable. Note that sending identity strings like this may reveal more to Bob than desirable.
 
-**Step 5.**  Alice confirms:
+**Step 4.**  Bob's server checks to see if Alice was able to create a resource containing the valid nonce value under the folder linked from her profile information:
+
+  * **Step 4.1.** Bob's server dereferences Alice's WebID and checks if she points to a valid folder using the `solid:tokens` term.
+```http
+> GET /profile HTTP/1.1
+> Host: alice.example
+...
+```
+  
+  * **Step 4.2.** In Alice's WebID profile, Bob's server then finds the URI of the tokens folder and concatenates the SHA1 sum of the nonce to it. Then it performs a simple `HEAD` request to check if the resource exists.
+```http
+> HEAD /tokens/2b743ea5699560665032496d957cd8c0075029d5 HTTP/1.1
+> Host: alice.example
+...
+< HTTP/1.1 200 OK
+```
+  
+**Step 5.**  Bob's server will now issue a bearer token that can then be passed to applications (as another form of binding Alice's identity to a specific credential on Bob's server) and then returns a successful response to Alice's 2nd `GET` request:
 
 ```http
 < HTTP/1.1 200 OK
-< Page-Owner-Token-OK: true
-< Set-Cookie: [whatever, optional]
+< Authorization: WebID-Bearer-Token abc789
 ...
 ```
 
-Alice only does this if the token was in fact the one she generated for her GET to Bob.
+Alice's application can now persist the bearer token in a private location, so that it can be reused by applications if they require credentials for bob's server. In doing so, she avoids the need to go through the complete handshake in the future.
 
-Only a response containing the header "Page-Owner-Token-OK: true" is taken as confirmation.
-
-The Set-Cookie is an optional shortcut.  With this cookie, Alice can give Bob some secret to use in future communications, so that Bob can act as an HTTP client accessing alice.example in the future without needing to go through his own SPOT handshake.
-
-**Step 6.**  Bob returns the protected content requested in Step 3
+A future request to Bob's server may looks as follows:
 
 ```http
+> GET /bar/ HTTP/1.1
+> Host: bod.example
+> Authorization: WebID-Bearer-Token abc789
+...
 < HTTP/1.1 200 OK
-< Set-Cookie: [whatever, optional]
-... content ...
 ```
-
-The Set-Cookie is an optional shortcut.  With this cookie, Bob can give Alice some secret to use in future communications, so that Alice and Bob do not have to repeat this handshake every time.
-
